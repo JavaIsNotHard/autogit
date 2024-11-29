@@ -1,87 +1,139 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
+	"io"
 	"os"
-	"os/exec"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
-type Model struct {
-	choices  []string
-	cursor   int
-	selected map[int]struct{}
-}
+const listHeight = 14
 
-func getUnstagedFiles() []string {
-	cmd := exec.Command("git", "diff", "--name-only")
+var (
+	titleStyle        = lipgloss.NewStyle().MarginLeft(2)
+	itemStyle         = lipgloss.NewStyle().PaddingLeft(4)
+	selectedItemStyle = lipgloss.NewStyle().PaddingLeft(2).Foreground(lipgloss.Color("170"))
+	paginationStyle   = list.DefaultStyles().PaginationStyle.PaddingLeft(4)
+	helpStyle         = list.DefaultStyles().HelpStyle.PaddingLeft(4).PaddingBottom(1)
+	quitTextStyle     = lipgloss.NewStyle().Margin(1, 0, 2, 4)
+)
 
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
+type item string
 
-	output, err := cmd.Output()
-	if err != nil {
-		fmt.Println(err)
+func (i item) FilterValue() string { return "" }
+
+type itemDelegate struct{}
+
+func (d itemDelegate) Height() int                             { return 1 }
+func (d itemDelegate) Spacing() int                            { return 0 }
+func (d itemDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
+func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
+	i, ok := listItem.(item)
+	if !ok {
+		return
 	}
 
-	fmt.Println(string(output))
+	str := fmt.Sprintf("%d. %s", index+1, i)
 
-	var unstagedFiles []string
-
-	var current = 0
-	for i, filesChar := range output {
-		if filesChar == '\n' {
-			unstagedFiles = append(unstagedFiles, string(output[current:i]))
-			current += i + 1
+	fn := itemStyle.Render
+	if index == m.Index() {
+		fn = func(s ...string) string {
+			return selectedItemStyle.Render("> " + strings.Join(s, " "))
 		}
 	}
 
-	return unstagedFiles
+	fmt.Fprint(w, fn(str))
 }
 
-func getUntrackedFiles() []string {
-	cmd := exec.Command("git", "ls-files", "--others", "--exclude-standard")
+type model struct {
+	list     list.Model
+	choice   string
+	quitting bool
+}
 
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
+func (m model) Init() tea.Cmd {
+	return nil
+}
 
-	output, err := cmd.Output()
-	if err != nil {
-		fmt.Println(err)
-	}
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.list.SetWidth(msg.Width)
+		return m, nil
 
-	var untrackedfiles []string
+	case tea.KeyMsg:
+		switch keypress := msg.String(); keypress {
+		case "q", "ctrl+c":
+			m.quitting = true
+			return m, tea.Quit
 
-	var current = 0
-	for i, filesChar := range output {
-		if filesChar == '\n' {
-			untrackedfiles = append(untrackedfiles, string(output[current:i]))
-			current += i + 1
+		case "enter":
+			i, ok := m.list.SelectedItem().(item)
+			if ok {
+				m.choice = string(i)
+			}
+			return m, tea.Quit
 		}
 	}
 
-	return untrackedfiles
+	var cmd tea.Cmd
+	m.list, cmd = m.list.Update(msg)
+	return m, cmd
 }
 
-func addCommitAndPusd() {
-	reader := bufio.NewReader(os.Stdin)
+func (m model) View() string {
+	choice := strings.TrimSpace(m.choice)
+	choice = strings.ToLower(choice)
 
-	fmt.Println("Do you want to proceed further ?")
-	input, _ := reader.ReadString('\n')
-	input = strings.TrimSpace(input)
-	if input == "yes" || input == "y" {
-		fmt.Println("Enter the untracked files you want to add: ")
-		for i, value := range getUntrackedFiles() {
-			fmt.Printf("%d %v\n", i+1, value)
-		}
-	} else {
-		fmt.Println("Hello World NO")
+	switch choice {
+	case "add":
+		return quitTextStyle.Render(fmt.Sprintf("%s", m.choice))
+	case "commit":
+		return quitTextStyle.Render(fmt.Sprintf("%s", m.choice))
+	case "push":
+		return quitTextStyle.Render(fmt.Sprintf("%s", m.choice))
+	case "all":
+		return quitTextStyle.Render(fmt.Sprintf("%s", m.choice))
+	case "list untracked":
+		return quitTextStyle.Render(fmt.Sprintf("%s", m.choice))
+	case "list unstaged":
+		return quitTextStyle.Render(fmt.Sprintf("%s", m.choice))
 	}
+
+	if m.quitting {
+		return quitTextStyle.Render("Not hungry? That’s cool.")
+	}
+	return "\n" + m.list.View()
 }
 
 func main() {
-	addCommitAndPusd()
+	items := []list.Item{
+		item("Add"),
+		item("Commit"),
+		item("Push"),
+		item("All"),
+		item("List Untracked"),
+		item("List Unstaged"),
+	}
+
+	const defaultWidth = 20
+
+	l := list.New(items, itemDelegate{}, defaultWidth, listHeight)
+	l.Title = "Which action do you want to perform?"
+	l.SetShowStatusBar(false)
+	l.SetFilteringEnabled(false)
+	l.Styles.Title = titleStyle
+	l.Styles.PaginationStyle = paginationStyle
+	l.Styles.HelpStyle = helpStyle
+
+	m := model{list: l}
+
+	if _, err := tea.NewProgram(m).Run(); err != nil {
+		fmt.Println("Error running program:", err)
+		os.Exit(1)
+	}
 }
